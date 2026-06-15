@@ -1,10 +1,7 @@
 {
- "null_uniform": 2.86783262347848,
- "pagerank_only": 2.733317724479,
- "log_retro_only": 2.4626259192242195,
- "log_gitcoin_only": 2.431439130978543,
- "tier_prior_only": 1.9149407416185797,
- "log_forks_only": 1.7397449247055314,
- "log_stars_only": 1.5732288343212149,
- "AURA_loo": 1.4728357404854757
+ "null_uniform": 0.7013810943,
+ "stars_only": 0.5199611552923137,
+ "structural_aura": 0.47686933342380744,
+ "market_only": 0.1506512280257554,
+ "AURA_v2_blend": 0.13670719795342037
 }

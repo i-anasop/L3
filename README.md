@@ -3,186 +3,127 @@
 </p>
 
 <h1 align="center">Aura</h1>
-<p align="center"><b>Log-Space Importance Model for Ethereum</b><br>
-Deep Funding GG24 · Level I · by <b>Anas</b></p>
+<p align="center"><b>Importance Model for Ethereum</b> — structural learning + prediction-market signal<br>
+Deep Funding GG24 · Level I · by <b>i-anasop</b></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/jury_variance_explained-48.6%25-e07a5f"></a>
+  <img src="https://img.shields.io/badge/LOO_SAE-0.137-e07a5f">
+  <img src="https://img.shields.io/badge/vs_structural-0.477-555">
+  <img src="https://img.shields.io/badge/metric-sum_abs_error-c75d42">
   <img src="https://img.shields.io/badge/validation-leave--one--out-444">
-  <img src="https://img.shields.io/badge/target-log--space-c75d42">
-  <img src="https://img.shields.io/badge/repos-98-555">
 </p>
 
-> Aura assigns relative importance weights to the 98 open-source repositories Ethereum depends on. It is built by **reading the contest's scoring code** rather than guessing at what the jury rewards — and that single decision shaped every modeling choice that follows.
+> Aura assigns relative importance weights to the 98 repositories Ethereum depends on. It combines a **structural model** (what the repo *is* — adoption, role, funding) with the **prediction-market signal** (what the crowd forecasts the final jury will say), optimally weighted by cross-validation against the real scoring metric.
 
 ---
 
 ## Table of contents
-1. [The problem](#1-the-problem)
-2. [Reading the scoring — the insight that defines Aura](#2-reading-the-scoring)
-3. [Why anchoring the public CSV is a trap](#3-why-anchoring-is-a-trap)
+1. [The problem & metric](#1-the-problem--metric)
+2. [Two signals](#2-two-signals)
+3. [Why the dependency graph fails (a real finding)](#3-why-the-dependency-graph-fails)
 4. [The model](#4-the-model)
-5. [Features and where they come from](#5-features)
-6. [Validation against the real jury objective](#6-validation)
-7. [What the model learned](#7-what-the-model-learned)
-8. [Predicted importance](#8-predicted-importance)
-9. [Reproduce](#9-reproduce)
-10. [Repository layout](#10-repository-layout)
+5. [Validation](#5-validation)
+6. [What the model learned](#6-what-the-model-learned)
+7. [Predicted importance](#7-predicted-importance)
+8. [Reproduce](#8-reproduce)
 
 ---
 
-## 1. The problem
+## 1. The problem & metric
 
-Given 98 projects and 3,677 dependencies, assign each of the 98 a weight representing its relative importance to Ethereum, summing to 1. The ground truth is a **human jury** that answers pairwise questions — *"is repo A more important than repo B, and by how much?"* — not absolute weights. New jury data arrives during the contest; a portion updates the live leaderboard and **the rest is held out for final scoring.** The winner is the model whose weights best match the jury's held-out judgments.
-
-That last sentence is the whole game: **final placement rewards generalization, not memorization.**
+Assign 98 repos a weight summing to 1, matching a human jury. The jury answers pairwise questions; the contest derives ground-truth weights from those (log-ratios → Huber fit → exponentiate) and scores each submission as the **sum of absolute errors** between predicted and jury weights. New jury data arrives during the contest — part updates the live board, the rest is held out for the final. **Final placement rewards generalization**, so we validate with leave-one-out CV against that SAE metric (not pair-cost — an earlier version optimized pair-cost and it was the wrong target).
 
 ---
 
-## 2. Reading the scoring
+## 2. Two signals
 
-The Deep Funding scoring mechanism (`deepfunding/scoring`) is short, and it tells you exactly what to optimize:
+| Signal | What it is | Standalone LOO SAE |
+|---|---|---|
+| **Structural model** | ridge over adoption / role / funding features | 0.477 |
+| **Market signal** | deep.seer.pm price — the crowd's forecast of the final jury | 0.151 |
+| **Aura v2 (blend)** | `0.14 · structural + 0.86 · market`, in log-space | **0.137** |
 
-```python
-def cost_function(logits, samples):
-    return sum((logits[b] - logits[a] - c) ** 2 for a, b, c in samples)
-```
+The market is powerful because it forecasts the *same held-out jury* we're graded against — and the contest explicitly sanctions it as a data source. The structural model contributes robustness and an independent, explainable view; the blend beats either alone.
 
-Each jury sample is a triple `(a, b, c)`: two repos, and `c` — the **log** of how much more important `b` is than `a`. Your cost is the squared error between your predicted log-ratio `(log wᵦ − log wₐ)` and the jury's observed one. Three properties follow, and they dictate the model:
-
-| Property | Consequence for Aura |
-|---|---|
-| **The target is log-weight** | Predict in log-space; train on pairwise log-ratios — the scoring's own geometry. |
-| **The cost is scale-invariant** | It depends only on *differences* of log-weights. Overall normalization is irrelevant — only the **shape** matters. |
-| **Spread is the master parameter** | Since only relative spacing counts, the dispersion of the log-weights is the single highest-leverage quantity to calibrate. |
-
-The math, explicitly. Let `xᵢ = log wᵢ`. For jury comparisons `S`, the jury's own weights minimize
-
-```
-  J(x) = Σ_(a,b,c)∈S  (x_b − x_a − c)²
-```
-
-This is a least-squares problem on a difference operator — it has a one-dimensional null space (adding a constant to every `xᵢ` leaves `J` unchanged), which is precisely the scale-invariance. Aura predicts `x` from features; the constant is fixed by normalization at the end and never affects the score.
+<p align="center"><img src="assets/blend.png" width="58%"></p>
 
 ---
 
-## 3. Why anchoring is a trap
+## 3. Why the dependency graph fails
 
-A tempting strategy is to take the published public-eval weights and reproduce them to many decimal places. It scores ~0 on the **public** leaderboard — and zero on the one that pays. After the event, the public scores are discarded and every model is re-scored on **held-out jury comparisons it never saw.** An anchored CSV has no opinion about anything outside the public set, so it collapses. Aura is the opposite: a model with a *view* on all 98 repos, tuned to generalize. That's what survives the switch.
+The intuitive approach — PageRank on the dependency graph — **does not work here, and proving that was a key result.** On the real 98-repo graph (4,718 nodes, 14k edges), PageRank is *anti*-correlated with jury weight (Spearman −0.13). The reason is structural: the jury rates **clients and specs** highest (go-ethereum, lighthouse, consensus-specs, execution-apis), but those are *end products and specifications that nothing depends on* (in-degree 0). Meanwhile heavily-depended-on crypto libraries (blst, 26 dependents) are rated only moderately. **Dependency-centrality measures the opposite of what the jury values**, so Aura excludes it as a primary signal.
 
 ---
 
 ## 4. The model
 
-A regularized **log-space ridge regression**, trained on the 50 repos with public jury weights, predicting all 98.
-
-<p align="center"><img src="assets/fit.png" width="58%"></p>
-
 ```
-features ─▶ standardize ─▶ ridge (α=10) ─▶ exp() ─▶ calibrate log-spread ─▶ normalize
-                            └ log-weight prediction       └ minimize held-out jury cost
+structural ─┐
+            ├─ blend (0.14 / 0.86, log-space) ─ calibrate spread ─ normalize ─▶ weights
+market ─────┘
 ```
 
-Two deliberate choices, both validated below:
-- **Heavy L2 (α=10).** With only 50 labeled repos, regularization is not optional. A gradient-boosted ensemble was tested and **lost** to plain ridge under cross-validation — so Aura ships the simpler model.
-- **Spread calibration.** Because scoring is scale-invariant, the dispersion of the predicted log-weights is tuned directly against held-out jury cost.
-
-<p align="center"><img src="assets/calibration.png" width="74%"></p>
-
-The curve is shallow-then-steep: under-dispersed weights leave the jury's strong preferences unexpressed, over-dispersed weights overshoot the big gaps. The minimum sits at a spread of **0.74**.
+- **Structural** — `Ridge(α=10)` on 8 features chosen by forward selection against the jury metric: `log_stars, log_forks, log_size, age_days, tier_prior, pagerank, has_graph, gitcoin_donors`. Heavy L2 because there are only 50 labels (a gradient-boosted ensemble was tried and lost to ridge).
+- **Market** — log of the seer market price per repo.
+- **Blend weight (0.14/0.86) and log-spread (0.91)** are both selected by cross-validation against LOO SAE.
 
 ---
 
-## 5. Features
+## 5. Validation
 
-Eight features, chosen by **forward selection against the real jury cost** (not a generic metric). Each was added only if it lowered honest leave-one-out pair-cost.
+Leave-one-out CV over the 50 public-weight repos, scored with the exact leaderboard metric.
 
-<p align="center"><img src="assets/coefficients.png" width="72%"></p>
+<p align="center"><img src="assets/validation.png" width="80%"></p>
 
-> **Reading this chart:** these are *partial* coefficients inside the joint model. The adoption features (`stars`, `forks`, `size`, `age`) are strongly correlated, so ridge spreads the shared signal across them — which is why `age` carries the largest positive coefficient while `size`, `pagerank` and `has_graph` go mildly negative *after* the others have absorbed the adoption signal. This is conditional effect, **not** standalone power. For standalone importance see the validation table in §6, where `stars` alone is the strongest single feature (−45%). Both views are true; they answer different questions.
-
-| Feature | Source | Signal |
+| Model | LOO SAE ↓ | vs null |
 |---|---|---|
-| `log_stars` | GitHub (live) | adoption — the dominant single predictor |
-| `log_forks`, `log_size` | GitHub (live) | adoption breadth & code surface area |
-| `age_days` | GitHub (live) | project maturity |
-| `tier_prior` | hand-coded roles | ecosystem function (client / spec / library / tooling) |
-| `pagerank`, `has_graph` | dependency graph | structural centrality within the dep graph |
-| `gitcoin_donors` | OSO funding data | community funding signal |
+| Uniform (null) | 0.701 | — |
+| Stars only | 0.520 | −26% |
+| Aura structural | 0.477 | −32% |
+| Market only | 0.151 | −78% |
+| **Aura v2 (blend)** | **0.137** | **−81%** |
 
-GitHub features are fetched live for all 98 repos. Graph centrality is computed with PageRank/eigenvector/betweenness on the dependency graph. Funding signals (Gitcoin, Optimism RetroPGF) come from OSO's published weighting data — the same economic datasets the contest organizers used to seed their reference weighting.
-
----
-
-## 6. Validation
-
-Every model is scored on the **171 public pairwise jury comparisons** with the exact `cost_function`, under **leave-one-out CV** — the same generalization regime as the post-event held-out leaderboard, so the number is meaningful rather than flattering.
-
-<p align="center"><img src="assets/validation.png" width="82%"></p>
-
-| Model | Jury pair-cost ↓ | vs null |
-|---|---|---|
-| Uniform (null) | 2.868 | — |
-| PageRank only | 2.733 | −5% |
-| RetroPGF $ only | 2.463 | −14% |
-| Gitcoin $ only | 2.431 | −15% |
-| Role tier only | 1.915 | −33% |
-| Forks only | 1.740 | −39% |
-| Stars only | 1.573 | −45% |
-| **Aura (full)** | **1.473** | **−49%** |
-
-Aura explains **48.6%** of jury disagreement and beats every individual signal. For reference, an unconstrained least-squares fit *directly* on the 171 comparisons (59 free parameters, hopelessly overfit) reaches 0.55 — that is the in-sample ceiling no generalizing model can touch.
-
-<p align="center"><img src="assets/feature_selection.png" width="78%"></p>
+> **Honest caveat:** the market price for the 50 public repos likely reflects the public data the crowd has seen, so 0.137 is an optimistic estimate of held-out performance — the truly held-out repos will be somewhat higher. But the market genuinely forecasts the final jury, so the blend is the strongest available predictor either way, and it dominates the structural-only baseline by a wide margin.
 
 ---
 
-## 7. What the model learned
+## 6. What the model learned
 
-- **Adoption dominates.** `log_stars` alone reaches −45%. The jury's notion of importance tracks real-world usage more than any other single feature — funding, graph centrality, or role.
-- **Funding helps, modestly.** RetroPGF and Gitcoin dollars are genuine positive predictors (−14/−15%), but their coverage across the 98 repos is sparse and raw adoption outranks them. Useful as a supporting feature, not a foundation.
-- **Graph centrality is weak *here*.** PageRank alone barely beats the null (−5%) — because the public dependency graph only covers ~34 of the 98 repos densely. It contributes at the margin via `has_graph`, but it is not the engine for this task.
-- **Simpler generalizes better.** The gradient-boosted ensemble lost to ridge in LOO-CV (1.56 vs 1.47). With 50 training points, regularization and feature selection beat model capacity every time.
-- **Spread calibration is real, not cosmetic.** Tuning log-weight dispersion moves the pair-cost by more than half a point — the single highest-leverage knob in the pipeline, and a direct consequence of scale-invariant scoring.
+- **Adoption is biased.** Stars over-weight popular niche libraries (web3j) and under-weight protocol-critical specs (consensus-specs, execution-apis). Structural features alone top out around 0.477.
+- **Dependency-centrality is the wrong signal** (§3) — a result, not an omission.
+- **The crowd already solved the hard part.** The market price tracks jury weight at Spearman 0.985, capturing the spec/client criticality that engineered features miss.
+- **The blend beats the market alone.** A small structural weight (0.14) corrects market noise on a handful of repos, lowering SAE from 0.151 to 0.137.
+- **Simpler structural model wins.** Ridge beat gradient boosting in CV; spread calibration is a high-leverage knob.
 
 ---
 
-## 8. Predicted importance
+## 7. Predicted importance
 
 <p align="center"><img src="assets/weights.png" width="82%"></p>
 
-The top of Aura's distribution lands where domain intuition says it should — go-ethereum, OpenZeppelin, Solidity, the EIPs, the consensus specs, the major clients — recovered purely from features trained against jury log-ratios.
+The distribution lands where domain intuition agrees — the major clients, the specs, the core languages and libraries at the top.
 
 ---
 
-## 9. Reproduce
+## 8. Reproduce
 
 ```bash
 git clone https://github.com/i-anasop/L3
-cd L3
-pip install -r requirements.txt
+cd L3 && pip install -r requirements.txt
 cd src
-python aura.py        # fits the model, writes aura_submission.csv
-python validate.py    # reproduces the full LOO pair-cost table
+python aura.py        # fits structural model, blends with market, writes submission
+python validate.py    # reproduces the LOO SAE table
 ```
 
-`aura_submission.csv` is the standalone model output — 98 weights summing to 1, the file built to survive the post-event re-scoring.
-
----
-
-## 10. Repository layout
-
 ```
-src/aura.py        the model — features → log-weights → calibrated submission
-src/features.py    feature assembly (GitHub + graph centrality + funding + role)
+src/aura.py        structural ridge + market blend → calibrated submission
+src/features.py    feature assembly
 src/tiers.py       ecosystem-role priors
-src/validate.py    honest LOO validation against the exact jury cost
-data/              GitHub features, centrality, OSO funding, raw jury comparisons
+src/validate.py    LOO validation on the real SAE metric
+data/              features, graph, funding, jury data, seer market prices
 assets/            figures
-Aura_Writeup.pdf   full writeup (PDF)
 ```
 
 ---
 
-<p align="center"><i>Built for Deep Funding GG24 Level I — by Anas.<br>
-Reading the scoring code instead of guessing turned out to be the whole game.</i></p>
+<p align="center"><i>Deep Funding GG24 Level I — by i-anasop.</i></p>

@@ -1,3 +1,7 @@
 __pycache__/
 *.pyc
 .DS_Store
+# build artifacts / deliverables (kept out of the repo)
+Aura_Writeup.pdf
+GITCOIN_WRITEUP.md
+aura_submission.csv

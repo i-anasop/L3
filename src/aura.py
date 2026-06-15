@@ -21,8 +21,8 @@ DATA = '/mnt/user-data/uploads'
 SELECTED = ['log_stars','age_days_log','has_graph','gitcoin_donors_log',
             'tier_prior','log_size','log_forks','pagerank']
 ALPHA = 10.0          # ridge L2 for the structural model (50 labels -> heavy reg)
-BLEND = 0.25          # weight on structural model; (1-BLEND) on the market signal (hedged blend)
-LOG_SPREAD = 0.87     # CV-optimal dispersion of the blended log-weights
+BLEND = 0.14          # weight on structural model; (1-BLEND) on the market signal
+LOG_SPREAD = 0.91     # CV-optimal dispersion of the blended log-weights
 
 def _labels():
     w={}
